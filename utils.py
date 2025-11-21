@@ -57,4 +57,5 @@ def detectar_y_rebotar_circulo_linea(particula, p1, p2):
         dot_product = particula.vx * normal_x + particula.vy * normal_y
         particula.vx -= 2 * dot_product * normal_x
         particula.vy -= 2 * dot_product * normal_y
-        particula.vx *= 0.95 # Fricción
+        particula.vx *= 0.99
+        particula.vy *= 0.99

@@ -20,10 +20,16 @@ class Particula:
     def mover(self, divisor_pasos):
         self.x += self.vx / divisor_pasos
         self.y += self.vy / divisor_pasos
-
+        # Si la partícula está caliente, vibra un poco. 
+        # Esto evita que se apilen estáticamente en el fondo.
+        if self.temperatura > 60: # Solo si está algo caliente
+            import random  # Asegurate de importar random arriba
+            agitacion = 0.5 # Fuerza de la vibración
+            self.x += random.uniform(-agitacion, agitacion)
+            self.y += random.uniform(-agitacion, agitacion)
     def update_color(self):
         """Actualiza color basado en temperatura individual."""
-        ratio = (self.temperatura - TEMP_AMBIENTE) / (TEMP_EBULLICION - TEMP_AMBIENTE)
+        ratio = (self.temperatura - TEMP_AMBIENTE) / (TEMP_HERVIR - TEMP_AMBIENTE)
         ratio = max(0, min(1, ratio))
         
         r = int(COLOR_FRIO[0] + (COLOR_CALIENTE[0] - COLOR_FRIO[0]) * ratio)
