@@ -1,26 +1,26 @@
 import math
 import random
 import sys
-
 import pygame
 
 from config import *
 from entities import Particula, ParticulaVapor
-from interface import HUD
-from utils import (detectar_y_rebotar_circulo_linea, generar_paredes_pava,
-                   map_value)
+from interface import HUD, MenuPrincipal, PantallaTeoria
+from utils import (detectar_y_rebotar_circulo_linea, generar_paredes_pava, map_value)
 
+# Inicialización Global
+pygame.init()
+pygame.mixer.init()
+screen = pygame.display.set_mode((ANCHO, ALTO))
+pygame.display.set_caption(TITULO)
+clock = pygame.time.Clock()
 
 class SimulacionPava:
-    def __init__(self):
-        pygame.init()
-        pygame.mixer.init()
-        self.screen = pygame.display.set_mode((ANCHO, ALTO))
-        pygame.display.set_caption(TITULO)
-        self.clock = pygame.time.Clock()
-        
+    def __init__(self, screen_ref):
+        self.screen = screen_ref
         self.hud = HUD()
         
+        # Cargar recursos
         try:
             img = pygame.image.load(RUTA_IMAGEN_PAVA)
             self.img_pava = pygame.transform.scale(img, (500, 500))
@@ -77,25 +77,30 @@ class SimulacionPava:
         py = lvl_top + random.uniform(-5, 5)
         self.vapores.append(ParticulaVapor(px, py))
 
-    def manejar_eventos(self):
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT: return False
-            
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_r: self.resetear_simulacion()
-                elif event.key == pygame.K_SPACE:
-                    self.encendida = not self.encendida
-                    if not self.encendida and self.snd_hervir:
-                        self.snd_hervir.stop()
-                        self.snd_reproduciendo = False
+    def manejar_eventos(self, event):
+        # Retorna "MENU" si quiere salir, sino None
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_r: 
+                self.resetear_simulacion()
+            elif event.key == pygame.K_SPACE:
+                self.encendida = not self.encendida
+                if not self.encendida and self.snd_hervir:
+                    self.snd_hervir.stop()
+                    self.snd_reproduciendo = False
+            elif event.key == pygame.K_ESCAPE:
+                if self.snd_hervir: self.snd_hervir.stop()
+                return "MENU"
 
-            if event.type == pygame.MOUSEBUTTONDOWN:
-                nuevo_modo = self.hud.manejar_clic(pygame.mouse.get_pos(), self.target_temp)
-                if nuevo_modo != self.target_temp:
-                    self.target_temp = nuevo_modo
-                    if not self.encendida and self.temperatura_promedio < self.target_temp:
-                        self.encendida = True
-        return True
+        if event.type == pygame.MOUSEBUTTONDOWN:
+            nuevo_modo = self.hud.manejar_clic(pygame.mouse.get_pos(), self.target_temp)
+            if nuevo_modo != self.target_temp:
+                self.target_temp = nuevo_modo
+                if not self.encendida and self.temperatura_promedio < self.target_temp:
+                    self.encendida = True
+        return None
+
+    def update(self, dt):
+        self.update_fisica(dt)
 
     def update_fisica(self, dt):
         if not self.particulas: return
@@ -116,22 +121,17 @@ class SimulacionPava:
 
         temp_acum = 0
         for p in self.particulas:
-            # 1. Enfriamiento General (Casi nulo gracias a settings)
             if p.temperatura > TEMP_AMBIENTE:
                 p_perdida = K_ENFRIAMIENTO_PARTICULA * (p.temperatura - TEMP_AMBIENTE)
                 perdida_total += p_perdida
                 dT = (p_perdida * dt) / (masa_p * CALOR_ESPECIFICO_AGUA)
                 p.temperatura = max(TEMP_AMBIENTE, p.temperatura - dT)
             
-            # 2. Calentamiento
             if self.encendida and p in particulas_calor:
                 dT = (pot_por_particula * dt) / (masa_p * CALOR_ESPECIFICO_AGUA)
                 p.temperatura = min(TEMP_HERVIR, p.temperatura + dT)
             
-            # 3. TURBULENCIA DE SUPERFICIE (Solución Realista)
-            # Si toca la superficie, simulamos la agitación del hervor.
             if p.y < nivel_agua_y + 15:
-                # Restamos muy poca temperatura (para que no baje el promedio)
                 p.temperatura -= 0.002 
                 p.temperatura = max(TEMP_AMBIENTE, p.temperatura)
             
@@ -174,19 +174,12 @@ class SimulacionPava:
             for _ in range(SUB_STEPS):
                 p.mover(SUB_STEPS)
                 for w1, w2 in self.paredes: detectar_y_rebotar_circulo_linea(p, w1, w2)
-                
                 p.vy += GRAVEDAD / SUB_STEPS
-                
                 if p.y > nivel_agua_y:
                     p.vy -= empuje / SUB_STEPS
-                    
-                    # --- PATADA FÍSICA DE HERVOR ---
-                    # Cuando llega arriba, le damos un golpe fuerte hacia abajo.
-                    # Esto simula la turbulencia sin enfriarla, manteniendo el calor.
                     if p.y < nivel_agua_y + 15:
-                        p.vy += 0.08  # Empujón fuerte hacia abajo
-                        p.vx += random.uniform(-0.15, 0.15) # Caos lateral
-
+                        p.vy += 0.08
+                        p.vx += random.uniform(-0.15, 0.15)
                 else:
                     p.vy *= 0.98
                 
@@ -216,18 +209,64 @@ class SimulacionPava:
             'encendida': self.encendida,
         }
         self.hud.dibujar(self.screen, data_hud)
-        pygame.display.flip()
+
+# --- CLASE PRINCIPAL DE LA APLICACIÓN ---
+class MainApp:
+    def __init__(self):
+        self.estado = "MENU" # Estados: MENU, SIMULACION, TEORIA
+        self.menu = MenuPrincipal()
+        self.teoria = PantallaTeoria()
+        self.simulacion = SimulacionPava(screen)
 
     def run(self):
         while True:
-            dt = self.clock.get_time() / 1000.0
-            if not self.manejar_eventos(): break
-            self.update_fisica(dt)
-            self.dibujar()
-            self.clock.tick(FPS)
-        pygame.quit()
-        sys.exit()
+            dt = clock.get_time() / 1000.0
+            eventos = pygame.event.get()
+            
+            for event in eventos:
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    sys.exit()
+                
+                # --- MANEJO DE EVENTOS SEGÚN ESTADO ---
+                if self.estado == "MENU":
+                    if event.type == pygame.MOUSEBUTTONDOWN:
+                        accion = self.menu.manejar_clic(event.pos)
+                        if accion == "SIMULACION":
+                            self.simulacion.resetear_simulacion()
+                            self.estado = "SIMULACION"
+                        elif accion == "TEORIA":
+                            self.estado = "TEORIA"
+                        elif accion == "SALIR":
+                            pygame.quit()
+                            sys.exit()
+
+                elif self.estado == "TEORIA":
+                    if event.type == pygame.MOUSEBUTTONDOWN:
+                        accion = self.teoria.manejar_clic(event.pos)
+                        if accion == "MENU":
+                            self.estado = "MENU"
+                
+                elif self.estado == "SIMULACION":
+                    accion = self.simulacion.manejar_eventos(event)
+                    if accion == "MENU":
+                        self.estado = "MENU"
+
+            # --- DIBUJADO Y UPDATES SEGÚN ESTADO ---
+            if self.estado == "MENU":
+                self.menu.dibujar(screen)
+                
+            elif self.estado == "TEORIA":
+                self.teoria.dibujar(screen)
+                
+            elif self.estado == "SIMULACION":
+                self.simulacion.update(dt)
+                self.simulacion.dibujar()
+
+            pygame.display.flip()
+            clock.tick(FPS)
 
 if __name__ == "__main__":
-    sim = SimulacionPava()
-    sim.run()
+    app = MainApp()
+    app.run()
+    
