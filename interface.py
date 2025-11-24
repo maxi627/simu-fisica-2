@@ -7,6 +7,8 @@ class HUD:
     def __init__(self):
         self.font = pygame.font.Font(None, 30)
         self.font_small = pygame.font.Font(None, 24)
+        # Fuente para la fórmula (tooltip)
+        self.font_formula = pygame.font.SysFont("arial", 20) 
         self.x_anchor = 750
         
         # --- BOTONES DE MODO (MATE / HERVIR) ---
@@ -22,6 +24,10 @@ class HUD:
         return nuevo_modo
 
     def dibujar(self, screen, data):
+        # Obtener posición del mouse para los tooltips
+        mouse_pos = pygame.mouse.get_pos()
+        tooltip_a_mostrar = None 
+
         # --- DIBUJAR BOTONES MODO ---
         color_mate = COLOR_BOTON_ACTIVO if data['target_temp'] == TEMP_MATE else COLOR_BOTON
         color_hervir = COLOR_BOTON_ACTIVO if data['target_temp'] == TEMP_HERVIR else COLOR_BOTON
@@ -42,15 +48,37 @@ class HUD:
              estado_txt = "LISTO (MATE)"
              color_estado = (0, 100, 200)
 
+        # Formato de números grandes para Delta U
+        if abs(data['delta_u']) < 10000:
+            du_str = f"{data['delta_u']:.0f}"
+        else:
+            du_str = f"{data['delta_u']/1000:.1f}k"
+
+        # Helper para formatear Joules del balance (kiloJoules si es muy grande)
+        def fmt_j(valor):
+            return f"{valor:.0f}" if valor < 10000 else f"{valor/1000:.1f}k"
+
         info = [
             (f"Temp Agua: {data['temp']:.1f}°C", 20),
             (f"Objetivo: {data['target_temp']:.0f}°C", 50),
             (f"Masa: {data['masa']:.2f} kg", 130), 
-            (f"Estado: {estado_txt}", 160, 0, color_estado),
-            (f"Tiempo: {data['tiempo']:.1f} s", 190),
-            ("Presiona 'R' para reiniciar", 240, 0, (50,50,50)),
-            ("Presiona 'ESC' para volver al Menu", 260, 0, (50,50,50)), # Agregado
-            ("[ESPACIO] ON/OFF manual", 280, 0, (50,50,50)),
+            
+            # --- LEYES ---
+            (f"ΔU (1° Ley): {du_str} J", 160, 0, (0, 0, 150), "FORMULA_1"),
+            (f"ΔS (2° Ley): {data['delta_s']:.1f} J/K", 190, 0, (100, 0, 100), "FORMULA_2"),
+
+            # --- BALANCE ENERGÉTICO (LO NUEVO) ---
+            (f"Q_p (Total): {fmt_j(data['q_p'])} J", 230, 0, (80,80,80), "FORMULA_QP"),
+            (f"Q_a (Agua): {fmt_j(data['q_a'])} J", 255, 0, (80,80,80), "FORMULA_QA"),
+            (f"Q_l (Vapor): {fmt_j(data['q_l'])} J", 280, 0, (80,80,80), "FORMULA_QL"),
+            # -------------------------------------
+
+            (f"Estado: {estado_txt}", 310, 0, color_estado),
+            (f"Tiempo: {data['tiempo']:.1f} s", 340),
+            
+            ("Presiona 'R' para reiniciar", 380, 0, (50,50,50)),
+            ("Presiona 'ESC' para volver al Menu", 400, 0, (50,50,50)),
+            ("[ESPACIO] ON/OFF manual", 420, 0, (50,50,50)),
         ]
 
         for item in info:
@@ -58,15 +86,51 @@ class HUD:
             y = item[1]
             offset_x = item[2] if len(item) > 2 else 0
             color = item[3] if len(item) > 3 else (0,0,0)
+            
             surf = self.font.render(texto, True, color)
-            screen.blit(surf, (self.x_anchor + offset_x, y))
+            # Guardamos el rect para detectar colisión
+            rect_texto = screen.blit(surf, (self.x_anchor + offset_x, y))
+
+            # --- DETECCIÓN DE HOVER ---
+            if len(item) > 4:
+                tag = item[4]
+                if rect_texto.collidepoint(mouse_pos):
+                    if tag == "FORMULA_1":
+                        tooltip_a_mostrar = "ΔU = Q - W (Energía Interna)"
+                    elif tag == "FORMULA_2":
+                        tooltip_a_mostrar = "ΔS = m · c · ln(Tf / Ti)"
+                    elif tag == "FORMULA_QP":
+                        tooltip_a_mostrar = "Qp = Potencia * Tiempo (Energía entregada)"
+                    elif tag == "FORMULA_QA":
+                        tooltip_a_mostrar = "Qa = m * c * ΔT (Calor para calentar)"
+                    elif tag == "FORMULA_QL":
+                        tooltip_a_mostrar = "Ql = m_vap * L_vap (Calor para evaporar)"
+
+        # --- DIBUJAR TOOLTIP AL FINAL ---
+        if tooltip_a_mostrar:
+            self.dibujar_tooltip(screen, tooltip_a_mostrar, mouse_pos)
+
+    def dibujar_tooltip(self, screen, texto, pos):
+        """Dibuja un recuadro amarillo con la fórmula cerca del mouse."""
+        padding = 5
+        surf_texto = self.font_formula.render(texto, True, (0, 0, 0))
+        
+        bg_rect = surf_texto.get_rect()
+        bg_rect.topleft = (pos[0] + 15, pos[1] + 15)
+        bg_rect.width += padding * 2
+        bg_rect.height += padding * 2
+
+        pygame.draw.rect(screen, (255, 255, 220), bg_rect) 
+        pygame.draw.rect(screen, (0, 0, 0), bg_rect, 1)
+        
+        screen.blit(surf_texto, (bg_rect.x + padding, bg_rect.y + padding))
+
 
 # --- NUEVAS CLASES PARA EL MENÚ ---
 class MenuPrincipal:
     def __init__(self):
         self.font_titulo = pygame.font.Font(None, 80)
         self.font_botones = pygame.font.Font(None, 50)
-        # Fuente más chica para los nombres
         self.font_footer = pygame.font.Font(None, 24) 
         
         center_x = ANCHO // 2
@@ -76,8 +140,6 @@ class MenuPrincipal:
         self.btn_teoria = pygame.Rect(center_x - 100, start_y + 80, 200, 50)
         self.btn_salir = pygame.Rect(center_x - 100, start_y + 160, 200, 50)
 
-        # --- LISTA DE INTEGRANTES ---
-        # Edita los nombres aquí:
         self.integrantes = [
             "Integrantes:",
             "Burgos Pablo",
@@ -88,13 +150,10 @@ class MenuPrincipal:
 
     def dibujar(self, screen):
         screen.fill(COLOR_FONDO)
-        
-        # Título
         titulo = self.font_titulo.render("Simulación Termodinámica", True, (0, 0, 0))
         rect_titulo = titulo.get_rect(center=(ANCHO//2, 150))
         screen.blit(titulo, rect_titulo)
         
-        # Botones
         botones = [
             (self.btn_iniciar, "Iniciar", (100, 200, 100)),
             (self.btn_teoria, "Teoría", (100, 150, 255)),
@@ -103,15 +162,14 @@ class MenuPrincipal:
         
         for rect, texto, color in botones:
             pygame.draw.rect(screen, color, rect, border_radius=10)
-            pygame.draw.rect(screen, (0,0,0), rect, 2, border_radius=10) # Borde
+            pygame.draw.rect(screen, (0,0,0), rect, 2, border_radius=10)
             surf = self.font_botones.render(texto, True, (255, 255, 255))
             text_rect = surf.get_rect(center=rect.center)
             screen.blit(surf, text_rect)
 
-        # --- DIBUJAR INTEGRANTES (Pie de página izquierdo) ---
-        start_y_nombres = ALTO - 20 - (len(self.integrantes) * 20) # Calcula altura para que quede al fondo
+        start_y_nombres = ALTO - 20 - (len(self.integrantes) * 20) 
         for i, linea in enumerate(self.integrantes):
-            surf_nombre = self.font_footer.render(linea, True, (80, 80, 80)) # Color gris oscuro
+            surf_nombre = self.font_footer.render(linea, True, (80, 80, 80)) 
             screen.blit(surf_nombre, (20, start_y_nombres + (i * 20)))
 
     def manejar_clic(self, pos):
@@ -147,8 +205,7 @@ class PantallaTeoria:
         ]
 
     def dibujar(self, screen):
-        screen.fill((240, 240, 250)) # Fondo ligeramente distinto
-        
+        screen.fill((240, 240, 250)) 
         titulo = self.font_titulo.render("Teoría Aplicada", True, (0, 0, 0))
         screen.blit(titulo, (50, 50))
         
@@ -159,7 +216,6 @@ class PantallaTeoria:
             screen.blit(surf, (50, y))
             y += 35
             
-        # Botón Volver
         pygame.draw.rect(screen, (100, 100, 100), self.btn_volver, border_radius=10)
         txt = self.font_boton.render("Volver", True, (255, 255, 255))
         screen.blit(txt, txt.get_rect(center=self.btn_volver.center))

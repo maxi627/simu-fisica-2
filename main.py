@@ -1,12 +1,14 @@
 import math
 import random
 import sys
+
 import pygame
 
 from config import *
 from entities import Particula, ParticulaVapor
 from interface import HUD, MenuPrincipal, PantallaTeoria
-from utils import (detectar_y_rebotar_circulo_linea, generar_paredes_pava, map_value)
+from utils import (detectar_y_rebotar_circulo_linea, generar_paredes_pava,
+                   map_value)
 
 # Inicialización Global
 pygame.init()
@@ -40,6 +42,7 @@ class SimulacionPava:
 
     def resetear_simulacion(self):
         self.masa_agua = 1.0
+        self.masa_inicial = self.masa_agua  # Guardamos la masa inicial para el balance
         self.temperatura_promedio = TEMP_AMBIENTE
         self.tiempo_sim = 0.0
         self.encendida = True
@@ -49,6 +52,10 @@ class SimulacionPava:
         self.particulas = []
         self.vapores = []
         self.masa_vaporizada_acum = 0.0
+
+        # --- VARIABLES TERMODINÁMICAS ACUMULATIVAS ---
+        self.delta_u = 0.0  # Cambio en Energía Interna (Joules)
+        self.delta_s = 0.0  # Cambio en Entropía (Joules/Kelvin)
         
         if self.snd_hervir: self.snd_hervir.stop()
         self.ajustar_cantidad_particulas()
@@ -139,6 +146,18 @@ class SimulacionPava:
             p.update_color()
 
         self.temperatura_promedio = temp_acum / len(self.particulas)
+        
+        # --- CÁLCULO DE LEYES TERMODINÁMICAS ---
+        # 1ra Ley: dU = dQ (Potencia neta * tiempo)
+        potencia_neta = potencia_aplicada - perdida_total
+        dq = potencia_neta * dt
+        self.delta_u += dq
+        
+        # 2da Ley: dS = dQ / T (T en Kelvin)
+        temp_kelvin = self.temperatura_promedio + 273.15
+        if temp_kelvin > 0:
+            self.delta_s += dq / temp_kelvin
+
         self.hirviendo = self.temperatura_promedio >= (TEMP_HERVIR - 0.5)
 
         # --- B. VAPORIZACIÓN ---
@@ -201,12 +220,30 @@ class SimulacionPava:
         for p in self.particulas: p.dibujar(self.screen)
         for pv in self.vapores: pv.dibujar(self.screen)
         
+        # --- CÁLCULOS DEL BALANCE ENERGÉTICO (Para el HUD) ---
+        # 1. Calor Entregado (Qp)
+        q_entregado = POTENCIA_FIJA * self.tiempo_sim if (self.encendida or self.tiempo_sim > 0) else 0
+        
+        # 2. Calor Sensible (Qa) - Energía almacenada en calentar el agua actual
+        q_sensible = self.masa_agua * CALOR_ESPECIFICO_AGUA * (self.temperatura_promedio - TEMP_AMBIENTE)
+        
+        # 3. Calor Latente (Ql) - Energía gastada en evaporar agua
+        masa_vaporizada = self.masa_inicial - self.masa_agua
+        q_latente = masa_vaporizada * CALOR_LATENTE_VAPORIZACION
+
         data_hud = {
             'temp': self.temperatura_promedio,
             'target_temp': self.target_temp,
             'tiempo': self.tiempo_sim,
             'masa': self.masa_agua,
             'encendida': self.encendida,
+            # Leyes
+            'delta_u': self.delta_u,
+            'delta_s': self.delta_s,
+            # Balance
+            'q_p': q_entregado,
+            'q_a': q_sensible,
+            'q_l': q_latente
         }
         self.hud.dibujar(self.screen, data_hud)
 
@@ -269,4 +306,3 @@ class MainApp:
 if __name__ == "__main__":
     app = MainApp()
     app.run()
-    
