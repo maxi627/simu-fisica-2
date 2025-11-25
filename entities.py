@@ -1,10 +1,6 @@
 import random
-
 import pygame
-
 from config import *
-
-
 class Particula:
     def __init__(self, x, y, vel_max_ini):
         self.x = x

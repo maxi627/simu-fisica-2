@@ -6,8 +6,8 @@ FPS = 120
 TITULO = "Simulación Termodinámica"
 
 # --- RUTAS ---
-RUTA_IMAGEN_PAVA = 'pava.webp'
-RUTA_SONIDO_HERVIR = 'boiling.wav'
+RUTA_IMAGEN_PAVA = os.path.join('imagenes', 'pava.webp')
+RUTA_SONIDO_HERVIR = os.path.join('sonidos', 'boiling.wav')
 
 # --- COLORES ---
 COLOR_FONDO = (255, 255, 255); COLOR_PAREDES = (0, 0, 0)
