@@ -22,7 +22,6 @@ class SimulacionPava:
         self.screen = screen_ref
         self.hud = HUD()
         
-        # Cargar recursos
         try:
             img = pygame.image.load(RUTA_IMAGEN_PAVA)
             self.img_pava = pygame.transform.scale(img, (500, 500))
@@ -41,24 +40,40 @@ class SimulacionPava:
         self.resetear_simulacion()
 
     def resetear_simulacion(self):
-        self.masa_agua = 1.0
-        self.masa_inicial = self.masa_agua  # Guardamos la masa inicial para el balance
+        self.masa_agua = 1.0 # Valor fijo por defecto
+        self.masa_inicial = self.masa_agua
         self.temperatura_promedio = TEMP_AMBIENTE
         self.tiempo_sim = 0.0
         self.encendida = True
         self.hirviendo = False
         self.snd_reproduciendo = False
         self.target_temp = TEMP_HERVIR 
+        
+        self.modo_manual = False
+        self.potencia_actual = POTENCIA_FIJA
+        self.temp_ambiente_actual = TEMP_AMBIENTE
+        self.k_aislamiento_actual = K_ENFRIAMIENTO_PARTICULA
+        
         self.particulas = []
         self.vapores = []
         self.masa_vaporizada_acum = 0.0
 
-        # --- VARIABLES TERMODINÁMICAS ACUMULATIVAS ---
-        self.delta_u = 0.0  # Cambio en Energía Interna (Joules)
-        self.delta_s = 0.0  # Cambio en Entropía (Joules/Kelvin)
+        self.delta_u = 0.0 
+        self.delta_s = 0.0 
         
         if self.snd_hervir: self.snd_hervir.stop()
         self.ajustar_cantidad_particulas()
+        
+        # Resetear sliders
+        self.hud.slider_target.val = 80 # Default manual objetivo
+        self.hud.slider_potencia.val = POTENCIA_FIJA
+        self.hud.slider_ambiente.val = TEMP_AMBIENTE
+        self.hud.slider_aislamiento.val = K_ENFRIAMIENTO_PARTICULA
+        
+        self.hud.slider_target.update_handle_pos()
+        self.hud.slider_potencia.update_handle_pos()
+        self.hud.slider_ambiente.update_handle_pos()
+        self.hud.slider_aislamiento.update_handle_pos()
 
     def ajustar_cantidad_particulas(self):
         target_count = int(self.masa_agua * PARTICULAS_POR_KG)
@@ -76,7 +91,10 @@ class SimulacionPava:
         if y_start > y_end: y_start = y_end
         px = random.randint(MIN_X_SPAWN, MAX_X_SPAWN)
         py = random.randint(y_start, y_end)
+        
+        temp_ini = self.temperatura_promedio if self.particulas else self.temp_ambiente_actual
         self.particulas.append(Particula(px, py, 1.0))
+        self.particulas[-1].temperatura = temp_ini
 
     def crear_vapor(self):
         lvl_top = map_value(self.masa_agua, MASA_MIN, MASA_MAX, Y_NIVEL_FONDO, Y_NIVEL_TOPE)
@@ -85,7 +103,6 @@ class SimulacionPava:
         self.vapores.append(ParticulaVapor(px, py))
 
     def manejar_eventos(self, event):
-        # Retorna "MENU" si quiere salir, sino None
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_r: 
                 self.resetear_simulacion()
@@ -98,12 +115,27 @@ class SimulacionPava:
                 if self.snd_hervir: self.snd_hervir.stop()
                 return "MENU"
 
-        if event.type == pygame.MOUSEBUTTONDOWN:
-            nuevo_modo = self.hud.manejar_clic(pygame.mouse.get_pos(), self.target_temp)
-            if nuevo_modo != self.target_temp:
-                self.target_temp = nuevo_modo
-                if not self.encendida and self.temperatura_promedio < self.target_temp:
-                    self.encendida = True
+        nuevo_modo, nuevo_manual = self.hud.manejar_eventos_input(event, self.target_temp, self.modo_manual)
+        
+        if nuevo_modo != self.target_temp:
+            self.target_temp = nuevo_modo
+            if not self.encendida and self.temperatura_promedio < self.target_temp:
+                self.encendida = True
+        
+        self.modo_manual = nuevo_manual
+        
+        if self.modo_manual:
+            # En modo manual, el "Target Temp" viene del slider
+            self.target_temp = self.hud.slider_target.val
+            
+            self.potencia_actual = self.hud.slider_potencia.val
+            self.temp_ambiente_actual = self.hud.slider_ambiente.val
+            self.k_aislamiento_actual = self.hud.slider_aislamiento.val
+        else:
+            self.potencia_actual = POTENCIA_FIJA
+            self.temp_ambiente_actual = TEMP_AMBIENTE
+            self.k_aislamiento_actual = K_ENFRIAMIENTO_PARTICULA
+            
         return None
 
     def update(self, dt):
@@ -113,11 +145,20 @@ class SimulacionPava:
         if not self.particulas: return
         nivel_agua_y = map_value(self.masa_agua, MASA_MIN, MASA_MAX, Y_NIVEL_FONDO, Y_NIVEL_TOPE)
 
-        if self.encendida and self.target_temp == TEMP_MATE:
-            if self.temperatura_promedio >= TEMP_MATE: self.encendida = False
-                
+        # --- LÓGICA DE CORTE AUTOMÁTICO (TERMOSTATO) ---
+        if self.encendida:
+            # Si estamos en modo manual, usamos el target del slider
+            if self.modo_manual:
+                 if self.temperatura_promedio >= self.target_temp:
+                     self.encendida = False
+            # Si NO estamos en manual, usamos la lógica de los presets
+            else:
+                 if self.target_temp == TEMP_MATE and self.temperatura_promedio >= TEMP_MATE:
+                     self.encendida = False
+                 # (Nota: El modo HERVIR preset por defecto NO corta, sigue hirviendo como pava vieja)
+
         # --- A. TERMODINÁMICA ---
-        potencia_aplicada = POTENCIA_FIJA if self.encendida else 0
+        potencia_aplicada = self.potencia_actual if self.encendida else 0
         perdida_total = 0
         masa_p = self.masa_agua / len(self.particulas)
         particulas_calor = [p for p in self.particulas if p.y > ZONA_CALOR_Y]
@@ -128,11 +169,12 @@ class SimulacionPava:
 
         temp_acum = 0
         for p in self.particulas:
-            if p.temperatura > TEMP_AMBIENTE:
-                p_perdida = K_ENFRIAMIENTO_PARTICULA * (p.temperatura - TEMP_AMBIENTE)
+            # Enfriamiento con aislamiento dinámico y temperatura ambiente dinámica
+            if p.temperatura > self.temp_ambiente_actual:
+                p_perdida = self.k_aislamiento_actual * (p.temperatura - self.temp_ambiente_actual)
                 perdida_total += p_perdida
                 dT = (p_perdida * dt) / (masa_p * CALOR_ESPECIFICO_AGUA)
-                p.temperatura = max(TEMP_AMBIENTE, p.temperatura - dT)
+                p.temperatura = max(self.temp_ambiente_actual, p.temperatura - dT)
             
             if self.encendida and p in particulas_calor:
                 dT = (pot_por_particula * dt) / (masa_p * CALOR_ESPECIFICO_AGUA)
@@ -140,20 +182,17 @@ class SimulacionPava:
             
             if p.y < nivel_agua_y + 15:
                 p.temperatura -= 0.002 
-                p.temperatura = max(TEMP_AMBIENTE, p.temperatura)
+                p.temperatura = max(self.temp_ambiente_actual, p.temperatura)
             
             temp_acum += p.temperatura
             p.update_color()
 
         self.temperatura_promedio = temp_acum / len(self.particulas)
         
-        # --- CÁLCULO DE LEYES TERMODINÁMICAS ---
-        # 1ra Ley: dU = dQ (Potencia neta * tiempo)
         potencia_neta = potencia_aplicada - perdida_total
         dq = potencia_neta * dt
         self.delta_u += dq
         
-        # 2da Ley: dS = dQ / T (T en Kelvin)
         temp_kelvin = self.temperatura_promedio + 273.15
         if temp_kelvin > 0:
             self.delta_s += dq / temp_kelvin
@@ -186,7 +225,10 @@ class SimulacionPava:
 
         # --- C. MOVIMIENTO ---
         for p in self.particulas:
-            ratio_temp = (p.temperatura - TEMP_AMBIENTE) / (TEMP_HERVIR - TEMP_AMBIENTE)
+            rango_temp = TEMP_HERVIR - self.temp_ambiente_actual
+            if rango_temp <= 0: rango_temp = 1 
+            ratio_temp = (p.temperatura - self.temp_ambiente_actual) / rango_temp
+            
             empuje = ratio_temp * MAX_EMPUJE_CALOR_PARTICULA
             v_max = MAX_VELOCIDAD_BASE + (ratio_temp * (MAX_VELOCIDAD_TOPE - MAX_VELOCIDAD_BASE))
             
@@ -220,14 +262,8 @@ class SimulacionPava:
         for p in self.particulas: p.dibujar(self.screen)
         for pv in self.vapores: pv.dibujar(self.screen)
         
-        # --- CÁLCULOS DEL BALANCE ENERGÉTICO (Para el HUD) ---
-        # 1. Calor Entregado (Qp)
-        q_entregado = POTENCIA_FIJA * self.tiempo_sim if (self.encendida or self.tiempo_sim > 0) else 0
-        
-        # 2. Calor Sensible (Qa) - Energía almacenada en calentar el agua actual
-        q_sensible = self.masa_agua * CALOR_ESPECIFICO_AGUA * (self.temperatura_promedio - TEMP_AMBIENTE)
-        
-        # 3. Calor Latente (Ql) - Energía gastada en evaporar agua
+        q_entregado = self.potencia_actual * self.tiempo_sim if (self.encendida or self.tiempo_sim > 0) else 0
+        q_sensible = self.masa_agua * CALOR_ESPECIFICO_AGUA * (self.temperatura_promedio - self.temp_ambiente_actual)
         masa_vaporizada = self.masa_inicial - self.masa_agua
         q_latente = masa_vaporizada * CALOR_LATENTE_VAPORIZACION
 
@@ -237,20 +273,19 @@ class SimulacionPava:
             'tiempo': self.tiempo_sim,
             'masa': self.masa_agua,
             'encendida': self.encendida,
-            # Leyes
             'delta_u': self.delta_u,
             'delta_s': self.delta_s,
-            # Balance
             'q_p': q_entregado,
             'q_a': q_sensible,
-            'q_l': q_latente
+            'q_l': q_latente,
+            'modo_manual': self.modo_manual,
+            'potencia_actual': self.potencia_actual
         }
         self.hud.dibujar(self.screen, data_hud)
 
-# --- CLASE PRINCIPAL DE LA APLICACIÓN ---
 class MainApp:
     def __init__(self):
-        self.estado = "MENU" # Estados: MENU, SIMULACION, TEORIA
+        self.estado = "MENU" 
         self.menu = MenuPrincipal()
         self.teoria = PantallaTeoria()
         self.simulacion = SimulacionPava(screen)
@@ -262,40 +297,28 @@ class MainApp:
             
             for event in eventos:
                 if event.type == pygame.QUIT:
-                    pygame.quit()
-                    sys.exit()
+                    pygame.quit(); sys.exit()
                 
-                # --- MANEJO DE EVENTOS SEGÚN ESTADO ---
                 if self.estado == "MENU":
                     if event.type == pygame.MOUSEBUTTONDOWN:
                         accion = self.menu.manejar_clic(event.pos)
                         if accion == "SIMULACION":
                             self.simulacion.resetear_simulacion()
                             self.estado = "SIMULACION"
-                        elif accion == "TEORIA":
-                            self.estado = "TEORIA"
-                        elif accion == "SALIR":
-                            pygame.quit()
-                            sys.exit()
+                        elif accion == "TEORIA": self.estado = "TEORIA"
+                        elif accion == "SALIR": pygame.quit(); sys.exit()
 
                 elif self.estado == "TEORIA":
                     if event.type == pygame.MOUSEBUTTONDOWN:
                         accion = self.teoria.manejar_clic(event.pos)
-                        if accion == "MENU":
-                            self.estado = "MENU"
+                        if accion == "MENU": self.estado = "MENU"
                 
                 elif self.estado == "SIMULACION":
                     accion = self.simulacion.manejar_eventos(event)
-                    if accion == "MENU":
-                        self.estado = "MENU"
+                    if accion == "MENU": self.estado = "MENU"
 
-            # --- DIBUJADO Y UPDATES SEGÚN ESTADO ---
-            if self.estado == "MENU":
-                self.menu.dibujar(screen)
-                
-            elif self.estado == "TEORIA":
-                self.teoria.dibujar(screen)
-                
+            if self.estado == "MENU": self.menu.dibujar(screen)
+            elif self.estado == "TEORIA": self.teoria.dibujar(screen)
             elif self.estado == "SIMULACION":
                 self.simulacion.update(dt)
                 self.simulacion.dibujar()
